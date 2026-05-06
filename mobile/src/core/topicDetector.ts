@@ -1,4 +1,4 @@
-import type { DeepSeekConfig, Message } from './types';
+import type { DeepSeekConfig, Message, ApiComponent } from './types';
 import { DeepSeekClient } from './deepseek';
 import prompts from '../../prompts/instructions.json';
 
@@ -14,8 +14,8 @@ const PROMPT = prompts.topicDetector.system_prompt.join('\n');
 export class TopicDetector {
   private client: DeepSeekClient;
 
-  constructor(config: DeepSeekConfig) {
-    this.client = new DeepSeekClient(config);
+  constructor(config: DeepSeekConfig, component: ApiComponent = 'topicDetector') {
+    this.client = new DeepSeekClient(config, component);
   }
 
   async detect(

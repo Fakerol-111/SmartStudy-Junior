@@ -1,4 +1,4 @@
-import type { DeepSeekConfig, ReviewResult, Message } from './types';
+import type { DeepSeekConfig, ReviewResult, Message, ApiComponent } from './types';
 import { DeepSeekClient } from './deepseek';
 import prompts from '../../prompts/instructions.json';
 
@@ -7,8 +7,8 @@ const REVIEWER_PROMPT = prompts.reviewer.system_prompt.join('\n');
 export class Reviewer {
   private client: DeepSeekClient;
 
-  constructor(config: DeepSeekConfig) {
-    this.client = new DeepSeekClient(config);
+  constructor(config: DeepSeekConfig, component: ApiComponent = 'reviewer') {
+    this.client = new DeepSeekClient(config, component);
   }
 
   async review(

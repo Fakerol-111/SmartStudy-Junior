@@ -1,0 +1,7 @@
+name = "smartstudy-usage"
+main = "api-usage-worker.js"
+compatibility_date = "2025-04-01"
+
+[[kv_namespaces]]
+binding = "USAGE_KV"
+id = "你的KV_NAMESPACE_ID"

@@ -122,6 +122,10 @@ export interface StudentProfileData {
   scores: Record<string, number>;
   weakPoints: string[];
   strengths: string[];
+  commonMistakes?: string[];
+  learningStyle?: string;
+  confidence?: string;
+  focus?: string;
   updatedAt: string;
 }
 
@@ -187,4 +191,23 @@ export interface HarnessModelConfig {
   handler: TieredModelConfig;
   router: TieredModelConfig;
   reviewer: TieredModelConfig;
+}
+
+// ── API Usage Tracking ──────────────────────────────────────
+export type ApiComponent =
+  | 'handler'
+  | 'router'
+  | 'reviewer'
+  | 'topicDetector'
+  | 'ocr'
+  | 'multimodal';
+
+export interface ApiUsageRecord {
+  deviceId: string;
+  model: string;
+  component: ApiComponent;
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  timestamp: string;
 }

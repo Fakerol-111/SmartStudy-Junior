@@ -1,5 +1,5 @@
 import { getDb } from './database';
-import type { StudentProfileData, TeacherSoulData, BlacklistEntryData } from '../core/types';
+import type { StudentProfileData, TeacherSoulData, BlacklistEntryData, ApiUsageRecord } from '../core/types';
 
 export interface Student {
   id?: number;
@@ -348,5 +348,47 @@ export class BlacklistRepository {
       studentId, knowledgePoint
     );
     return !!row;
+  }
+}
+
+// ── App Setting Repository ──────────────────────────────────
+export class AppSettingRepository {
+  async get(key: string): Promise<string | null> {
+    const db = await getDb();
+    const row = await db.getFirstAsync<{ value: string }>(
+      'SELECT value FROM app_settings WHERE key = ?', key
+    );
+    return row?.value || null;
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      'INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)',
+      key, value
+    );
+  }
+}
+
+// ── API Usage Repository ────────────────────────────────────
+export class ApiUsageRepository {
+  async create(record: ApiUsageRecord): Promise<void> {
+    const db = await getDb();
+    await db.runAsync(
+      `INSERT INTO api_usage (device_id, model, component, prompt_tokens, completion_tokens, total_tokens)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      record.deviceId, record.model, record.component,
+      record.promptTokens, record.completionTokens, record.totalTokens
+    );
+  }
+
+  async listUnsynced(): Promise<any[]> {
+    const db = await getDb();
+    return db.getAllAsync('SELECT * FROM api_usage WHERE synced = 0 ORDER BY created_at ASC');
+  }
+
+  async markSynced(id: number): Promise<void> {
+    const db = await getDb();
+    await db.runAsync('UPDATE api_usage SET synced = 1 WHERE id = ?', id);
   }
 }

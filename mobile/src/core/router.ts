@@ -1,4 +1,4 @@
-import type { DeepSeekConfig, Intent, RouterResult, Message } from './types';
+import type { DeepSeekConfig, Intent, RouterResult, Message, ApiComponent } from './types';
 import { DeepSeekClient } from './deepseek';
 import prompts from '../../prompts/instructions.json';
 
@@ -7,8 +7,8 @@ const ROUTER_PROMPT = prompts.router.system_prompt.join('\n');
 export class Router {
   private client: DeepSeekClient;
 
-  constructor(config: DeepSeekConfig) {
-    this.client = new DeepSeekClient(config);
+  constructor(config: DeepSeekConfig, component: ApiComponent = 'router') {
+    this.client = new DeepSeekClient(config, component);
   }
 
   async route(

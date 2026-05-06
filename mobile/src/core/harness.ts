@@ -8,6 +8,10 @@ import { ToolRegistry } from '../tools/registry';
 import { TopicDetector } from './topicDetector';
 import { buildSystemPrompt } from './systemPrompt';
 import { checkInput, checkOutput } from './safety';
+import prompts from '../../prompts/instructions.json';
+
+const PROFILE_PROMPT = prompts.profile.system_prompt.join('\n');
+const GUIDANCE_PROMPT = prompts.guidance.student_prompt.join('\n');
 
 export class StudyHarness {
   private router: Router;
@@ -23,24 +27,24 @@ export class StudyHarness {
   private currentIntent: Intent = 'teach';
   private currentSubjects: string[] = [];
   private modelUpgraded = false;
-  private previousProfileSnapshot: string | null = null;
   private abortController: AbortController | null = null;
 
   constructor(
     modelConfig: HarnessModelConfig,
     registry: ToolRegistry,
   ) {
-    this.fastClient = new DeepSeekClient(modelConfig.handler.fast);
+    this.fastClient = new DeepSeekClient(modelConfig.handler.fast, 'handler');
     this.flagshipClient = modelConfig.handler.flagship
-      ? new DeepSeekClient(modelConfig.handler.flagship)
+      ? new DeepSeekClient(modelConfig.handler.flagship, 'handler')
       : null;
     this.currentClient = this.fastClient;
     this.registry = registry;
-    this.router = new Router(modelConfig.router.fast); // Router always uses fast
+    this.router = new Router(modelConfig.router.fast, 'router');
     this.reviewer = new Reviewer(
       modelConfig.reviewer.flagship || modelConfig.reviewer.fast,
+      'reviewer',
     );
-    this.topicDetector = new TopicDetector(modelConfig.router.fast);
+    this.topicDetector = new TopicDetector(modelConfig.router.fast, 'topicDetector');
     this.teacher = new Teacher(this.fastClient, registry);
     this.memory = new MemoryManager();
   }
@@ -243,23 +247,22 @@ export class StudyHarness {
         return;
       }
 
-      // 10. Save to memory
+      // 10. Save to memory + periodic profile update (every 5 conversations)
       try {
         if (signal.aborted) { yield { type: 'cancelled' }; return; }
         await this.memory.saveMessage('user', text);
         await this.memory.saveMessage('assistant', finalResponse);
-        await this.memory.incrementConversationCount();
+        const conversationCount = await this.memory.incrementConversationCount();
 
-        // Encouragement: triggered by actual profile progress (not by conversation count)
-        let encouragementContent = '';
-        if (!finalResponse.includes('__TOPIC_END__')) {
-          encouragementContent = await this.generateEncouragement(handlerHistory, signal);
-        }
-
-        if (encouragementContent) {
-          yield { type: 'delta', content: '\n\n' + encouragementContent };
-          const encouragementMsg: Message = { role: 'assistant', content: encouragementContent };
-          yield { type: 'done', history: [...handlerHistory, encouragementMsg] };
+        // Every 5 conversations: analyze history, update profile, encourage + guide
+        if (conversationCount > 0 && conversationCount % 5 === 0 && !finalResponse.includes('__TOPIC_END__')) {
+          yield { type: 'progress', stage: 'review', message: '老师帮你总结一下这段时间的学习情况……' };
+          const summary = await this.analyzeAndUpdateProfile(handlerHistory, signal);
+          if (summary) {
+            yield { type: 'delta', content: '\n\n' + summary };
+            const summaryMsg: Message = { role: 'assistant', content: summary };
+            yield { type: 'done', history: [...handlerHistory, summaryMsg] };
+          }
         }
       } catch { /* DB not ready */ }
     } finally {
@@ -267,50 +270,115 @@ export class StudyHarness {
     }
   }
 
-  /** Generate encouragement only when profile shows measurable progress */
-  private async generateEncouragement(conversationHistory: Message[], signal?: AbortSignal): Promise<string> {
+  /**
+   * Every 5 conversations: analyze history, update student profile,
+   * and return encouragement text if progress detected.
+   */
+  private async analyzeAndUpdateProfile(conversationHistory: Message[], signal?: AbortSignal): Promise<string> {
     try {
-      const profile = await this.memory.getProfile();
-      let progressNote = '';
+      // 1. Get old profile
+      const oldProfile = await this.memory.getProfile();
 
-      // Check profile-based progress
-      if (profile && this.previousProfileSnapshot) {
-        const prev = JSON.parse(this.previousProfileSnapshot) as StudentProfileData;
-        if (profile.weakPoints.length < prev.weakPoints.length) {
-          const mastered = prev.weakPoints.filter(
-            (wp: string) => !profile.weakPoints.includes(wp)
-          );
-          progressNote = mastered.length > 0
-            ? `学生之前在"${mastered.join('、')}"上是薄弱点，现在已经进步了。`
-            : '学生的薄弱点减少了，有明显的进步。';
-        }
-      }
-
-      // Update snapshot for next comparison
-      if (profile) {
-        this.previousProfileSnapshot = JSON.stringify(profile);
-      }
-
-      // Only generate encouragement if actual progress detected
-      if (!progressNote) return '';
-
-      // Extract recent user messages for context
-      const recentExchanges = conversationHistory
+      // 2. Extract recent dialogue (exclude system prompts)
+      const recentMessages = conversationHistory
         .filter(m => m.role === 'user' || m.role === 'assistant')
-        .slice(-4)
-        .map(m => `${m.role === 'user' ? '学生' : '老师'}: ${m.content.slice(0, 100)}`)
+        .slice(-30)
+        .map(m => `${m.role === 'user' ? '学生' : '老师'}: ${m.content.slice(0, 300)}`)
         .join('\n');
 
-      const prompt = `你是一位热情的初中老师。${progressNote}\n\n最近对话片段:\n${recentExchanges || '(无)'}\n\n请根据以上内容写一段简短的鼓励语（40字以内），具体指出学生的进步并大力表扬。只说鼓励的话，不要格式标记。`;
+      if (!recentMessages.trim()) return '';
+
+      // 3. Ask AI to analyze and generate updated profile
+      const existingHint = oldProfile
+        ? `\n\n该生当前的画像（结合新对话进行增量更新，不要丢失已有信息）:\n${JSON.stringify(oldProfile, null, 2)}`
+        : '\n\n该生暂无画像，请根据对话建立。';
+
+      const prompt = `${PROFILE_PROMPT}${existingHint}
+
+最近对话:
+${recentMessages}`;
 
       const { message } = await this.fastClient.chatCompletion(
         [{ role: 'user', content: prompt }],
         undefined,
-        0.8,
-        150,
+        0.3,
+        1024,
         signal,
       );
-      return message.content || '';
+
+      const text = message.content.trim();
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return '';
+
+      const parsed = JSON.parse(jsonMatch[0]);
+      const newProfile: StudentProfileData = {
+        description: parsed.description || oldProfile?.description || '',
+        scores: { ...oldProfile?.scores, ...(parsed.scores || {}) },
+        weakPoints: parsed.weakPoints || oldProfile?.weakPoints || [],
+        strengths: parsed.strengths || oldProfile?.strengths || [],
+        commonMistakes: parsed.commonMistakes || oldProfile?.commonMistakes || [],
+        learningStyle: parsed.learningStyle || oldProfile?.learningStyle || '',
+        confidence: parsed.confidence || oldProfile?.confidence || '',
+        focus: parsed.focus || oldProfile?.focus || '',
+        updatedAt: new Date().toISOString(),
+      };
+
+      // 4. Detect progress: did any weak points get mastered?
+      let encouragementContent = '';
+      if (oldProfile && oldProfile.weakPoints.length > 0) {
+        const mastered = oldProfile.weakPoints.filter(
+          (wp: string) => !newProfile.weakPoints.includes(wp)
+        );
+        if (mastered.length > 0) {
+          const progressNote = `学生之前在"${mastered.join('、')}"上是薄弱点，现在已经掌握了。`;
+          const excerpt = recentMessages.length > 100
+            ? recentMessages.slice(0, 100) + '…'
+            : recentMessages;
+
+          const encouragePrompt = `你是一位热情的初中老师。${progressNote}\n\n近期对话:\n${excerpt || '(无)'}\n\n写一段简短的鼓励语（40字以内），具体指出学生的进步并大力表扬。只说鼓励的话，不要格式标记。`;
+
+          const { message: encMsg } = await this.fastClient.chatCompletion(
+            [{ role: 'user', content: encouragePrompt }],
+            undefined,
+            0.8,
+            150,
+            signal,
+          );
+          encouragementContent = encMsg.content || '';
+        }
+      }
+
+      // 5. Save updated profile
+      await this.memory.updateProfile(newProfile);
+
+      // 6. Generate guidance if there are remaining weak points
+      let guidanceContent = '';
+      if (newProfile.weakPoints.length > 0) {
+        const strengthsText = newProfile.strengths.length > 0
+          ? `已掌握: ${newProfile.strengths.join('、')}`
+          : '';
+        const mistakesText = newProfile.commonMistakes && newProfile.commonMistakes.length > 0
+          ? `\n常见错误: ${newProfile.commonMistakes.join('、')}`
+          : '';
+        const styleText = newProfile.learningStyle ? `\n学习特点: ${newProfile.learningStyle}` : '';
+
+        const guidanceInput = `当前画像:
+- 薄弱点: ${newProfile.weakPoints.join('、')}
+- ${strengthsText}${mistakesText}${styleText}`;
+
+        const { message: guideMsg } = await this.fastClient.chatCompletion(
+          [{ role: 'user', content: `${GUIDANCE_PROMPT}\n\n${guidanceInput}` }],
+          undefined,
+          0.7,
+          200,
+          signal,
+        );
+        guidanceContent = guideMsg.content || '';
+      }
+
+      // 7. Combine: encouragement first, then guidance
+      const parts = [encouragementContent, guidanceContent].filter(Boolean);
+      return parts.length > 0 ? parts.join('\n\n') : '';
     } catch {
       return '';
     }

@@ -1,4 +1,18 @@
 import prompts from '../../prompts/instructions.json';
+import { apiUsageTracker } from './apiUsageTracker';
+
+function trackOcrUsage(data: any, component: 'ocr' | 'multimodal'): void {
+  const usage = data.usage;
+  if (!usage) return;
+  // DashScope uses input_tokens/output_tokens; OpenAI uses prompt_tokens/completion_tokens
+  apiUsageTracker.record({
+    model: OCR_CONFIG.model,
+    component,
+    promptTokens: usage.input_tokens ?? usage.prompt_tokens ?? 0,
+    completionTokens: usage.output_tokens ?? usage.completion_tokens ?? 0,
+    totalTokens: usage.total_tokens ?? 0,
+  });
+}
 
 const OCR_CONFIG = {
   apiKey: process.env.EXPO_PUBLIC_OCR_API_KEY || '',
@@ -52,6 +66,7 @@ export async function analyzeImage(base64: string, signal?: AbortSignal): Promis
   }
 
   const data = await response.json();
+  trackOcrUsage(data, 'ocr');
   const content = data.choices?.[0]?.message?.content || '';
 
   if (content.startsWith('【解答】')) {
@@ -111,5 +126,6 @@ export async function multimodalChat(
   }
 
   const data = await response.json();
+  trackOcrUsage(data, 'multimodal');
   return data.choices?.[0]?.message?.content || '（无响应）';
 }

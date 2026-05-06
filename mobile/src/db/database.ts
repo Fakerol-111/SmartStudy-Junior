@@ -84,6 +84,23 @@ async function initTables(database: SQLite.SQLiteDatabase): Promise<void> {
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (student_id) REFERENCES students(id)
     );
+
+    CREATE TABLE IF NOT EXISTS app_settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS api_usage (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      device_id TEXT NOT NULL,
+      model TEXT NOT NULL,
+      component TEXT NOT NULL,
+      prompt_tokens INTEGER DEFAULT 0,
+      completion_tokens INTEGER DEFAULT 0,
+      total_tokens INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now')),
+      synced INTEGER DEFAULT 0
+    );
   `);
 }
 
@@ -95,6 +112,8 @@ export async function clearAllDbData(): Promise<void> {
     DELETE FROM mistake_book;
     DELETE FROM knowledge_nodes;
     DELETE FROM knowledge_blacklist;
+    DELETE FROM api_usage;
+    DELETE FROM app_settings;
     DELETE FROM students;
   `);
 }

@@ -24,7 +24,6 @@ import { StudyHarness } from './src/core/harness';
 import { ToolRegistry } from './src/tools/registry';
 import { Calculator } from './src/tools/calculator';
 import { WebSearch } from './src/tools/webSearch';
-import { Plotter } from './src/tools/plotter';
 
 import ChatMessage from './src/components/ChatMessage';
 import CameraCapture from './src/components/CameraCapture';
@@ -32,6 +31,8 @@ import DevLogin from './src/components/DevLogin';
 import DevPanel from './src/components/DevPanel';
 import type { TestQuestion } from './src/data/testQuestions';
 import type { HarnessModelConfig } from './src/core/types';
+import { apiUsageTracker } from './src/core/apiUsageTracker';
+import { getDb } from './src/db/database';
 
 // ── Helpers ───────────────────────────────────────────────
 const SUBJECT_CN: Record<string, string> = {
@@ -98,8 +99,6 @@ function createHarness(): StudyHarness {
   const registry = new ToolRegistry();
   registry.register(new Calculator());
   registry.register(new WebSearch());
-  registry.register(new Plotter());
-  // NOTE: OcrTool is NOT registered here — it's handled at App level before calling the handler
   return new StudyHarness({
     handler: HANDLER_CONFIG,
     router: ROUTER_CONFIG,
@@ -143,6 +142,16 @@ export default function App() {
   // Ensure student exists in DB from the start (fixes empty history)
   useEffect(() => {
     harnessRef.current?.memory.ensureStudent('同学').catch(() => {});
+    // Initialize API usage tracker
+    const telemetryEndpoint = process.env.EXPO_PUBLIC_TELEMETRY_ENDPOINT || '';
+    if (telemetryEndpoint) {
+      getDb().then(db => {
+        apiUsageTracker.init(telemetryEndpoint, {
+          get: (key: string) => db.getFirstAsync<{ value: string }>('SELECT value FROM app_settings WHERE key = ?', key).then(r => r?.value || null),
+          set: (key: string, value: string) => db.runAsync('INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)', key, value),
+        });
+      }).catch(() => {});
+    }
   }, []);
 
   // Sync loadingRef with isLoading for stale-closure-safe checks
